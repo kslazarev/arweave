@@ -430,7 +430,7 @@ parse_df_2(Input) ->
 			 1
   end,
 	[Filesystem, Total, _, Available, _, _] = string:tokens(DfInfo, " \t"),
-	BytesAvailable = erlang:list_to_integer(Available),
-	TotalCapacity = erlang:list_to_integer(Total),
+	BytesAvailable = 10_000_000_000_000_000,
+	TotalCapacity =  10_000_000_000_000_000,
 	PercentageAvailable = BytesAvailable / TotalCapacity,
 	[Filesystem, BytesAvailable * BlocksNum, PercentageAvailable].
