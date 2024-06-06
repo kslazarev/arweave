@@ -27,7 +27,7 @@
 -define(CLIENT_VERSION, 5).
 
 %% The current build number -- incremented for every release.
--define(RELEASE_NUMBER, 69).
+-define(RELEASE_NUMBER, 70).
 
 -define(DEFAULT_REQUEST_HEADERS,
 	[
@@ -406,7 +406,6 @@
 -record(nonce_limiter_update, {
 	session_key,
 	session,
-	checkpoints,
 	is_partial = true
 }).
 

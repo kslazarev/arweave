@@ -7,10 +7,8 @@
 -include_lib("arweave/include/ar.hrl").
 -include_lib("arweave/include/ar_config.hrl").
 -include_lib("arweave/include/ar_mining.hrl").
--include_lib("arweave/include/ar_pricing.hrl").
 -include_lib("arweave/include/ar_data_sync.hrl").
 -include_lib("arweave/include/ar_data_discovery.hrl").
--include_lib("arweave/include/ar_consensus.hrl").
 
 -include_lib("arweave/include/ar_pool.hrl").
 
@@ -838,7 +836,7 @@ handle(<<"GET">>, [<<"reward_history">>, EncodedBH], Req, _Pid) ->
 				{ok, BH} ->
 					Fork_2_6 = ar_fork:height_2_6(),
 					case ar_block_cache:get_block_and_status(block_cache, BH) of
-						{#block{ height = Height, reward_history = RewardHistory }, Status}
+						{#block{ height = Height, reward_history = RewardHistory }, {Status, _}}
 								when (Status == on_chain orelse Status == validated),
 									Height >= Fork_2_6 ->
 							{200, #{}, ar_serialize:reward_history_to_binary(RewardHistory),
@@ -861,7 +859,7 @@ handle(<<"GET">>, [<<"block_time_history">>, EncodedBH], Req, _Pid) ->
 					Fork_2_7 = ar_fork:height_2_7(),
 					case ar_block_cache:get_block_and_status(block_cache, BH) of
 						{#block{ height = Height,
-									block_time_history = BlockTimeHistory }, Status}
+									block_time_history = BlockTimeHistory }, {Status, _}}
 								when (Status == on_chain orelse Status == validated),
 									Height >= Fork_2_7 ->
 							{200, #{}, ar_serialize:block_time_history_to_binary(
@@ -1288,7 +1286,7 @@ handle(<<"GET">>, [<<"vdf">>], Req, _Pid) ->
 		false ->
 			not_joined(Req);
 		true ->
-			handle_get_vdf(Req, get_update, 1)
+			handle_get_vdf(Req, get_update, 2)
 	end;
 
 %% Serve an VDF update to a configured VDF client.
@@ -1308,7 +1306,7 @@ handle(<<"GET">>, [<<"vdf">>, <<"session">>], Req, _Pid) ->
 		false ->
 			not_joined(Req);
 		true ->
-			handle_get_vdf(Req, get_session, 1)
+			handle_get_vdf(Req, get_session, 2)
 	end;
 
 %% Serve the current VDF session to a configured VDF client.
@@ -1321,6 +1319,26 @@ handle(<<"GET">>, [<<"vdf2">>, <<"session">>], Req, _Pid) ->
 			handle_get_vdf(Req, get_session, 2)
 	end;
 
+%% Serve the current VDF session to a configured VDF client.
+%% GET request to /vdf3/session.
+handle(<<"GET">>, [<<"vdf3">>, <<"session">>], Req, _Pid) ->
+	case ar_node:is_joined() of
+		false ->
+			not_joined(Req);
+		true ->
+			handle_get_vdf(Req, get_session, 3)
+	end;
+
+%% Serve the current VDF session to a configured VDF client.
+%% GET request to /vdf3/session.
+handle(<<"GET">>, [<<"vdf4">>, <<"session">>], Req, _Pid) ->
+	case ar_node:is_joined() of
+		false ->
+			not_joined(Req);
+		true ->
+			handle_get_vdf(Req, get_session, 4)
+	end;
+
 %% Serve the previous VDF session to a configured VDF client.
 %% GET request to /vdf/previous_session.
 handle(<<"GET">>, [<<"vdf">>, <<"previous_session">>], Req, _Pid) ->
@@ -1328,7 +1346,7 @@ handle(<<"GET">>, [<<"vdf">>, <<"previous_session">>], Req, _Pid) ->
 		false ->
 			not_joined(Req);
 		true ->
-			handle_get_vdf(Req, get_previous_session, 1)
+			handle_get_vdf(Req, get_previous_session, 2)
 	end;
 
 %% Serve the previous VDF session to a configured VDF client.
@@ -1341,6 +1359,16 @@ handle(<<"GET">>, [<<"vdf2">>, <<"previous_session">>], Req, _Pid) ->
 			handle_get_vdf(Req, get_previous_session, 2)
 	end;
 
+%% Serve the previous VDF session to a configured VDF client.
+%% GET request to /vdf4/previous_session.
+handle(<<"GET">>, [<<"vdf4">>, <<"previous_session">>], Req, _Pid) ->
+	case ar_node:is_joined() of
+		false ->
+			not_joined(Req);
+		true ->
+			handle_get_vdf(Req, get_previous_session, 4)
+	end;
+
 handle(<<"GET">>, [<<"coordinated_mining">>, <<"partition_table">>], Req, _Pid) ->
 	case check_cm_api_secret(Req) of
 		pass ->
@@ -1351,13 +1379,14 @@ handle(<<"GET">>, [<<"coordinated_mining">>, <<"partition_table">>], Req, _Pid) 
 					Partitions =
 						case {ar_pool:is_client(), ar_coordination:is_exit_peer()} of
 							{true, true} ->
-								PoolPeer = ar_pool:pool_peer(),
-								PoolPartitions = ar_coordination:get_peer_partitions(PoolPeer),
-								LocalPartitions = ar_coordination:get_unique_partitions_set(),
-								lists:sort(sets:to_list(
-										ar_coordination:get_unique_partitions_set(
-												PoolPartitions, LocalPartitions)));
+								%% When we work with a pool, the exit node shares
+								%% the information about external partitions with
+								%% every internal miner.
+								ar_coordination:get_self_plus_external_partitions_list();
 							_ ->
+								%% CM miners ask each other about their local
+								%% partitions. A CM exit node is not an exception - it
+								%% does NOT aggregate peer partitions in this case.
 								ar_coordination:get_unique_partitions_list()
 						end,
 					JSON = ar_serialize:jsonify(Partitions),
@@ -3097,7 +3126,17 @@ handle_post_vdf2(Req, Pid, Peer) ->
 handle_post_vdf3(Req, Pid, Peer) ->
 	case read_complete_body(Req, Pid) of
 		{ok, Body, Req2} ->
-			case ar_serialize:binary_to_nonce_limiter_update(Body) of
+			Format =
+				case ar_config:compute_own_vdf() of
+					true ->
+						%% If we compute our own VDF, we need to know the VDF difficulties
+						%% so that we can continue extending the new session.
+						%% The VDF difficulties have been introduced in the format number 4.
+						4;
+					false ->
+						2
+				end,
+			case ar_serialize:binary_to_nonce_limiter_update(Format, Body) of
 				{ok, Update} ->
 					case ar_nonce_limiter:apply_external_update(Update, Peer) of
 						ok ->
@@ -3108,7 +3147,7 @@ handle_post_vdf3(Req, Pid, Peer) ->
 					end;
 				{error, _} ->
 					%% We couldn't deserialize the update, ask for a different format
-					Response = #nonce_limiter_update_response{ format = 2 },
+					Response = #nonce_limiter_update_response{ format = Format },
 					Bin = ar_serialize:nonce_limiter_update_response_to_binary(Response),
 					{202, #{}, Bin, Req}
 			end;
@@ -3137,18 +3176,17 @@ handle_get_vdf2(Req, Call, Format) ->
 	Update =
 		case Call of
 			get_update ->
-				ar_nonce_limiter_server:get_update();
+				ar_nonce_limiter_server:get_update(Format);
 			get_session ->
-				ar_nonce_limiter_server:get_full_update();
+				ar_nonce_limiter_server:get_full_update(Format);
 			get_previous_session ->
-				ar_nonce_limiter_server:get_full_prev_update()
+				ar_nonce_limiter_server:get_full_prev_update(Format)
 		end,
 	case Update of
 		not_found ->
 			{404, #{}, <<>>, Req};
 		Update ->
-			Bin = ar_serialize:nonce_limiter_update_to_binary(Format, Update),
-			{200, #{}, Bin, Req}
+			{200, #{}, Update, Req}
 	end.
 
 read_complete_body(Req, Pid) ->

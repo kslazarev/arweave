@@ -130,8 +130,9 @@ external_update_test_() ->
 
 serialize_test_() ->
     [
-		{timeout, 120, fun test_serialize_update_format_1/0},
 		{timeout, 120, fun test_serialize_update_format_2/0},
+		{timeout, 120, fun test_serialize_update_format_3/0},
+		{timeout, 120, fun test_serialize_update_format_4/0},
 		{timeout, 120, fun test_serialize_response/0},
 		{timeout, 120, fun test_serialize_response_compatibility/0}
 	].
@@ -764,65 +765,6 @@ test_mining_session() ->
 %% serialize_test_
 %%
 
-test_serialize_update_format_1() ->
-	SessionKey0 = {crypto:strong_rand_bytes(48), 0, 1},
-	SessionKey1 = {crypto:strong_rand_bytes(48), 1, 1},
-	Update = #nonce_limiter_update{
-		session_key = SessionKey1,
-		is_partial = true,
-		checkpoints = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 25)],
-		session = #vdf_session{
-			upper_bound = 1,
-			next_upper_bound = 1,
-			prev_session_key = SessionKey0,
-			step_number = 1,
-			seed = element(1, SessionKey1),
-			steps = [crypto:strong_rand_bytes(32)]
-		}
-	},
-	Binary = ar_serialize:nonce_limiter_update_to_binary(1, Update),
-
-	%% Deserialize function copied from ar_serialize:binary_to_nonce_limiter_update/1 as of
-	%% commit 4bc555e1fa8b764c329e9e41d53489ca8cbfbfc5
-	%% This test confirms that an updtaed VDF server can build a payload for a unupdated VDF
-	%% client. i.e. that the Server can generate payload in Format 1
-	Format1Deserialize =
-		fun
-			(<< NextSeed:48/binary, Interval:64, IsPartial:8,
-				CheckpointLen:16, Checkpoints:(CheckpointLen * 32)/binary,
-				StepNumber:64, Seed:48/binary, UpperBoundSize:8, UpperBound:(UpperBoundSize * 8),
-				NextUpperBoundSize:8, NextUpperBound:(NextUpperBoundSize * 8),
-				StepsLen:16, Steps:(StepsLen * 32)/binary, PrevSessionKeyBin/binary >>)
-			when UpperBoundSize > 0, StepsLen > 0, CheckpointLen == ?VDF_CHECKPOINT_COUNT_IN_STEP ->
-				NextUpperBound2 = case NextUpperBoundSize of 0 -> undefined; _ -> NextUpperBound end,
-				NonceLimiterUpdate = #nonce_limiter_update{ session_key = {NextSeed, Interval},
-						checkpoints = ar_serialize:parse_32b_list(Checkpoints),
-						is_partial = case IsPartial of 0 -> false; _ -> true end,
-						session = Session = #vdf_session{ step_number = StepNumber, seed = Seed,
-								upper_bound = UpperBound, next_upper_bound = NextUpperBound2,
-								steps = ar_serialize:parse_32b_list(Steps) } },
-				case PrevSessionKeyBin of
-					<<>> ->
-						{ok, NonceLimiterUpdate};
-					<< PrevNextSeed:48/binary, PrevInterval:64 >> ->
-						Session2 = Session#vdf_session{ prev_session_key = {PrevNextSeed, PrevInterval} },
-						{ok, NonceLimiterUpdate#nonce_limiter_update{ session = Session2 }};
-					_ ->
-						{error, invalid1}
-				end;
-			(_Bin) ->
-				{error, invalid2}
-		end,
-
-	ExpectedSession = (Update#nonce_limiter_update.session)#vdf_session{
-		prev_session_key = {element(1, SessionKey0), element(2, SessionKey0)}
-	},
-	ExpectedUpdate = Update#nonce_limiter_update{
-		session_key = {element(1, SessionKey1), element(2, SessionKey1)},
-		session = ExpectedSession
-	},
-	?assertEqual({ok, ExpectedUpdate}, Format1Deserialize(Binary)).
-
 test_serialize_update_format_2() ->
 	SessionKey0 = {crypto:strong_rand_bytes(48), 0, 1},
 	SessionKey1 = {crypto:strong_rand_bytes(48), 1, 1},
@@ -830,8 +772,8 @@ test_serialize_update_format_2() ->
 	Update = #nonce_limiter_update{
 		session_key = SessionKey1,
 		is_partial = true,
-		checkpoints = Checkpoints,
 		session = #vdf_session{
+			step_checkpoints_map = #{ 1 => Checkpoints },
 			upper_bound = 1,
 			next_upper_bound = 1,
 			prev_session_key = SessionKey0,
@@ -841,7 +783,49 @@ test_serialize_update_format_2() ->
 		}
 	},
 	Binary = ar_serialize:nonce_limiter_update_to_binary(2, Update),
-	?assertEqual({ok, Update}, ar_serialize:binary_to_nonce_limiter_update(Binary)).
+	?assertEqual({ok, Update}, ar_serialize:binary_to_nonce_limiter_update(2, Binary)).
+
+test_serialize_update_format_3() ->
+	SessionKey0 = {crypto:strong_rand_bytes(48), 0, 1},
+	SessionKey1 = {crypto:strong_rand_bytes(48), 1, 1},
+	Checkpoints = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 25)],
+	Update = #nonce_limiter_update{
+		session_key = SessionKey1,
+		is_partial = true,
+		session = #vdf_session{
+			step_checkpoints_map = #{ 1 => Checkpoints },
+			upper_bound = 1,
+			next_upper_bound = 1,
+			prev_session_key = SessionKey0,
+			step_number = 1,
+			seed = element(1, SessionKey1),
+			steps = [crypto:strong_rand_bytes(32)]
+		}
+	},
+	Binary = ar_serialize:nonce_limiter_update_to_binary(3, Update),
+	?assertEqual({ok, Update}, ar_serialize:binary_to_nonce_limiter_update(3, Binary)).
+
+test_serialize_update_format_4() ->
+	SessionKey0 = {crypto:strong_rand_bytes(48), 0, 1},
+	SessionKey1 = {crypto:strong_rand_bytes(48), 1, 1},
+	Checkpoints = [crypto:strong_rand_bytes(32) || _ <- lists:seq(1, 25)],
+	Update = #nonce_limiter_update{
+		session_key = SessionKey1,
+		is_partial = true,
+		session = #vdf_session{
+			step_checkpoints_map = #{ 1 => Checkpoints },
+			upper_bound = 1,
+			next_upper_bound = 1,
+			prev_session_key = SessionKey0,
+			vdf_difficulty = 10000,
+			next_vdf_difficulty = 1,
+			step_number = 1,
+			seed = element(1, SessionKey1),
+			steps = [crypto:strong_rand_bytes(32)]
+		}
+	},
+	Binary = ar_serialize:nonce_limiter_update_to_binary(4, Update),
+	?assertEqual({ok, Update}, ar_serialize:binary_to_nonce_limiter_update(4, Binary)).
 
 %% @doc test serializing and deserializing a #nonce_limiter_update_response when the client
 %% is running the same node version as the server.
@@ -890,7 +874,7 @@ init(Req, State) ->
 
 handle([<<"vdf">>], Req, State) ->
 	{ok, Body, _} = ar_http_req:body(Req, ?MAX_BODY_SIZE),
-	case ar_serialize:binary_to_nonce_limiter_update(Body) of
+	case ar_serialize:binary_to_nonce_limiter_update(2, Body) of
 		{ok, Update} ->
 			handle_update(Update, Req, State);
 		{error, _} ->
@@ -902,13 +886,15 @@ handle([<<"vdf">>], Req, State) ->
 handle_update(Update, Req, State) ->
 	{Seed, _, _} = Update#nonce_limiter_update.session_key,
 	IsPartial  = Update#nonce_limiter_update.is_partial,
-	UpdateOutput = hd(Update#nonce_limiter_update.checkpoints),
-
 	Session = Update#nonce_limiter_update.session,
 	StepNumber = Session#vdf_session.step_number,
+	Checkpoints = maps:get(StepNumber, Session#vdf_session.step_checkpoints_map),
+
+	UpdateOutput = hd(Checkpoints),
+
 	SessionOutput = hd(Session#vdf_session.steps),
 
-	?assertNotEqual(Update#nonce_limiter_update.checkpoints, Session#vdf_session.steps),
+	?assertNotEqual(Checkpoints, Session#vdf_session.steps),
 	%% #nonce_limiter_update.checkpoints should be the checkpoints of the last step so
 	%% the head of checkpoints should match the head of the session's steps
 	?assertEqual(UpdateOutput, SessionOutput),
@@ -977,7 +963,6 @@ apply_external_update(SessionKey, ExistingSteps, StepNumber, IsPartial, PrevSess
 	Update = #nonce_limiter_update{
 		session_key = SessionKey,
 		is_partial = IsPartial,
-		checkpoints = [],
 		session = Session
 	},
 	ar_nonce_limiter:apply_external_update(Update, Peer).
