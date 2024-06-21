@@ -15,9 +15,9 @@ end).
 -define(RPM_BY_PATH(Path, LimitByIP, DefaultPathLimit), fun() ->
 	case Path of
 		[<<"chunk">> | _] ->
-			{chunk,	maps:get(chunk, LimitByIP, 12000)}; % ~50 MB/s.
+			{chunk,	maps:get(chunk, LimitByIP, 150)}; % ~50 MB/s.
 		[<<"chunk2">> | _] ->
-			{chunk,	maps:get(chunk, LimitByIP, 12000)}; % ~50 MB/s.
+			{chunk,	maps:get(chunk, LimitByIP, 150)}; % ~50 MB/s.
 		[<<"data_sync_record">> | _] ->
 			{data_sync_record, maps:get(data_sync_record, LimitByIP, 1000)};
 		[<<"recent_hash_list_diff">> | _] ->
@@ -60,9 +60,9 @@ end).
 -define(RPM_BY_PATH(Path, LimitByIP, DefaultPathLimit), fun() ->
 	case Path of
 		[<<"chunk">> | _] ->
-			{chunk,	maps:get(chunk, LimitByIP, 12000)}; % ~50 MB/s.
+			{chunk,	maps:get(chunk, LimitByIP, 150)}; % ~50 MB/s.
 		[<<"chunk2">> | _] ->
-			{chunk,	maps:get(chunk, LimitByIP, 12000)}; % ~50 MB/s.
+			{chunk,	maps:get(chunk, LimitByIP, 150)}; % ~50 MB/s.
 		[<<"data_sync_record">> | _] ->
 			{data_sync_record,	maps:get(data_sync_record, LimitByIP, 40)};
 		[<<"recent_hash_list_diff">> | _] ->
